@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"tghomebot/api"
@@ -64,7 +65,7 @@ func (s *Storage) GetChats() []int64 {
 func (s *Storage) loadData() error {
 	s.data = &api.Data{Chats: map[int64]struct{}{}}
 
-	if err := os.MkdirAll(s.filePath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.filePath), os.ModePerm); err != nil {
 		return utils.WrapError("mkdir", err)
 	}
 	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
