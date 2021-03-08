@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tghomebot
+  labels:
+    app: tghomebot
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      tier: tghomebot
+  template:
+    metadata:
+      labels:
+        tier: tghomebot
+    spec:
+      containers:
+        - name: tghomebot
+          image: popovpsk/tghomebot:latest
+          env:
+            - name: SYS_PORT
+              value: "12001"
+            - name: TG_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tghomebot
+                  key: token
+            - name: QBIT_LOGIN
+              valueFrom:
+                secretKeyRef:
+                  name: tghomebot
+                  key: login
+            - name: QBIT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: tghomebot
+                  key: password
+            - name: QBIT_URL
+              value: "http://192.168.1.49:8082"
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+            requests:
+              memory: "64Mi"
+              cpu: "30m"

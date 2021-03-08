@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"tghomebot/data"
 	"tghomebot/qbittorrent"
+	"tghomebot/storage"
 	"tghomebot/utils"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -14,9 +14,10 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+//Bot ...
 type Bot struct {
-	botApi      *tgbotapi.BotAPI
-	data        *data.Storage
+	botAPI      *tgbotapi.BotAPI
+	data        *storage.Storage
 	api         *qbittorrent.Client
 	token       string
 	events      chan string
@@ -24,7 +25,8 @@ type Bot struct {
 	logger      *logrus.Logger
 }
 
-func NewBot(token string, data *data.Storage, api *qbittorrent.Client, logger *logrus.Logger) (*Bot, error) {
+//NewBot constructor
+func NewBot(token string, data *storage.Storage, api *qbittorrent.Client, logger *logrus.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, utils.WrapError("new telegram bot", err)
@@ -35,18 +37,19 @@ func NewBot(token string, data *data.Storage, api *qbittorrent.Client, logger *l
 		api:         api,
 		data:        data,
 		token:       token,
-		botApi:      bot,
+		botAPI:      bot,
 		downloading: sync.Map{},
 		events:      make(chan string),
 		logger:      logger,
 	}, nil
 }
 
+//Start ...
 func (b *Bot) Start() error {
 	b.startWatching()
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 60
-	updCh, err := b.botApi.GetUpdatesChan(updateConfig)
+	updCh, err := b.botAPI.GetUpdatesChan(updateConfig)
 	if err != nil {
 		return err
 	}
@@ -54,7 +57,7 @@ func (b *Bot) Start() error {
 		for event := range b.events {
 			for _, chatID := range b.data.GetChats() {
 				msg := tgbotapi.NewMessage(chatID, event)
-				if _, err = b.botApi.Send(msg); err != nil {
+				if _, err = b.botAPI.Send(msg); err != nil {
 					logrus.Error(utils.WrapError("bot send event message", err))
 				}
 			}
@@ -84,7 +87,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		err = utils.WrapError("message handling", err)
 		b.logger.Error(err)
 		msg := tgbotapi.NewMessage(chatID, err.Error())
-		_, err = b.botApi.Send(msg)
+		_, err = b.botAPI.Send(msg)
 		if err != nil {
 			b.logger.Error(utils.WrapError("bot sending message", err))
 		}
@@ -94,7 +97,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 func (b *Bot) handleFile(update tgbotapi.Update) error {
 	fileID := update.Message.Document.FileID
 	fileConfig := tgbotapi.FileConfig{FileID: fileID}
-	file, err := b.botApi.GetFile(fileConfig)
+	file, err := b.botAPI.GetFile(fileConfig)
 	if err != nil {
 		return utils.WrapError("get telegram file info", err)
 	}

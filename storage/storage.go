@@ -1,9 +1,10 @@
-package data
+package storage
 
 import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"tghomebot/api"
@@ -13,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+//Storage ...
 type Storage struct {
 	filePath           string
 	data               *api.Data
@@ -22,13 +24,16 @@ type Storage struct {
 	isDataSourceExists bool
 }
 
+//NewStorage ...
 func NewStorage(filePath string, logger *logrus.Logger) *Storage {
 	s := &Storage{
 		filePath:           filePath,
 		logger:             logger,
 		isDataSourceExists: true,
 	}
+
 	err := s.loadData()
+
 	if err != nil {
 		s.logger.Error(fmt.Errorf("storage load data: %w", err))
 		s.isDataSourceExists = false
@@ -36,6 +41,7 @@ func NewStorage(filePath string, logger *logrus.Logger) *Storage {
 	return s
 }
 
+//AddChatIfNotExists adds a chat to the list for events
 func (s *Storage) AddChatIfNotExists(chatID int64) {
 	_, ok := s.data.Chats[chatID]
 	if ok {
@@ -49,6 +55,7 @@ func (s *Storage) AddChatIfNotExists(chatID int64) {
 	}
 }
 
+//GetChats returning all chats for pub
 func (s *Storage) GetChats() []int64 {
 	i := 0
 	s.dataRwm.RLock()
@@ -64,7 +71,7 @@ func (s *Storage) GetChats() []int64 {
 func (s *Storage) loadData() error {
 	s.data = &api.Data{Chats: map[int64]struct{}{}}
 
-	if err := os.MkdirAll(s.filePath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.filePath), os.ModePerm); err != nil {
 		return utils.WrapError("mkdir", err)
 	}
 	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
