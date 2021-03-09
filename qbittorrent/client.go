@@ -58,7 +58,6 @@ func (c *Client) GetTorrentsInfo() ([]api.Torrent, error) {
 
 	req.Header.SetMethod(fasthttp.MethodGet)
 	req.SetRequestURI(c.url + torrentsInfoRoute)
-	req.Header.SetCookie("SID", "e6KimCBra0fsDLFq0pa5B6joVi3XmOFD")
 	req.Header.SetBytesV(fasthttp.HeaderCookie, c.cookie)
 
 	if err := c.client.Do(req, resp); err != nil {
