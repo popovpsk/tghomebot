@@ -3,119 +3,118 @@ package qbittorrent
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
-
-	"tghomebot/api"
-
-	"github.com/mailru/easyjson"
-	"github.com/valyala/fasthttp"
 )
 
-//Client qbittorent api
+// Client qBittorrent Api
 type Client struct {
-	client   fasthttp.Client
+	client   http.Client
 	url      string
-	cookie   []byte
-	login    string
+	cookies  []*http.Cookie
+	username string
 	password string
 }
 
-//nolint:golint
+// qBittorrent api routes
 const (
-	QueuedUPState    = "queuedUP"
-	CheckingDLState  = "checkingDL"
-	DownloadingState = "downloading"
-	UploadingState   = "uploading"
-
 	addTorrentsRoute  = "/api/v2/torrents/add"
 	torrentsInfoRoute = "/api/v2/torrents/info"
+	loginRoute        = "/api/v2/auth/login"
 )
 
 //NewAPIClient constructor
-func NewAPIClient(url, login, password string) *Client {
+func NewAPIClient(url, username, password string) *Client {
 	a := &Client{
-		login:    login,
+		username: username,
 		password: password,
 		url:      url,
-		client:   fasthttp.Client{},
+		client:   http.Client{},
 	}
-	a.auth()
+	a.login()
 	go func() {
 		for range time.Tick(time.Hour) {
-			a.auth()
+			a.login()
 		}
 	}()
 	return a
 }
 
 //GetTorrentsInfo returning all torrents
-func (c *Client) GetTorrentsInfo() ([]api.Torrent, error) {
-	req, resp := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(resp)
-
-	req.Header.SetMethod(fasthttp.MethodGet)
-	req.SetRequestURI(c.url + torrentsInfoRoute)
-	req.Header.SetBytesV(fasthttp.HeaderCookie, c.cookie)
-
-	if err := c.client.Do(req, resp); err != nil {
-		return nil, err
+func (c *Client) GetTorrentsInfo() ([]Torrent, error) {
+	req, err := http.NewRequest(http.MethodGet, c.url+torrentsInfoRoute, nil)
+	if err != nil {
+		return nil, fmt.Errorf("http.NewRequest: %w", err)
 	}
-	if resp.Header.StatusCode() > 400 {
-		c.auth()
-		fasthttp.ReleaseResponse(resp)
-		resp = fasthttp.AcquireResponse()
-		c.client.Do(req, resp)
+	c.addCookies(req)
+
+	resp, err := c.client.Do(req)
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		err = c.login()
+		if err != nil {
+			return nil, fmt.Errorf("c.username: %w", err)
+		}
+		c.addCookies(req)
+		resp, err = c.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("client.Do (%s): %w", req.RequestURI, err)
+		}
 	}
-	result := api.Torrents{}
-	err := easyjson.Unmarshal(resp.Body(), &result)
-	return result, err
+	var result []Torrent
+	d := json.NewDecoder(resp.Body)
+	err = d.Decode(&result)
+	if err != nil {
+		return nil, fmt.Errorf("json.Decode: %w", err)
+	}
+	return result, nil
 }
 
 //SendMagnet creates torrent downloading by magnet
 func (c *Client) SendMagnet(magnet []byte) (err error) {
-	req, resp := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(resp)
-
 	boundary := c.randomBoundary()
+	contentType := fmt.Sprintf("multipart/form-data; boundary=%s", boundary)
+	requestBody := bytes.NewBuffer(c.getMultipartURLBody([]byte(boundary), magnet))
+	req, err := http.NewRequest(http.MethodPost, c.url+addTorrentsRoute, requestBody)
+	if err != nil {
+		return fmt.Errorf("http.NewRequest:%w", err)
+	}
+	req.Header.Set("content-type", contentType)
+	c.addCookies(req)
 
-	req.SetRequestURI(c.url + addTorrentsRoute)
-	req.Header.SetMethod(fasthttp.MethodPost)
-	req.Header.SetMultipartFormBoundary(boundary)
-	req.SetBodyRaw(c.getMultipartURLBody([]byte(boundary), magnet))
-	req.Header.SetBytesV(fasthttp.HeaderCookie, c.cookie)
-
-	err = fasthttp.Do(req, resp)
-	if resp.StatusCode() != fasthttp.StatusOK {
-		return fmt.Errorf("torrents/add response status code:%d", resp.StatusCode())
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("c.clent.Do (%s) :%w", req.RequestURI, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("torrents/add response status code:%d", resp.StatusCode)
 	}
 	return
 }
 
 //SendFile creates torrent downloading by file
 func (c *Client) SendFile(file []byte) (err error) {
-	req, resp := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(resp)
-
 	boundary := c.randomBoundary()
-	req.SetRequestURI(c.url + addTorrentsRoute)
-	req.Header.SetMethod(fasthttp.MethodPost)
-	req.Header.SetMultipartFormBoundary(boundary)
-	req.SetBodyRaw(c.getMultipartFileBody([]byte(boundary), file))
-	req.Header.SetBytesV(fasthttp.HeaderCookie, c.cookie)
+	contentType := fmt.Sprintf("multipart/form-data; boundary=%s", boundary)
+	requestBody := bytes.NewBuffer(c.getMultipartFileBody([]byte(boundary), file))
 
-	err = c.client.Do(req, resp)
+	req, err := http.NewRequest(http.MethodPost, c.url+addTorrentsRoute, requestBody)
 	if err != nil {
-		return fmt.Errorf("http call: %w", err)
+		return fmt.Errorf("http.NewRequest:%w", err)
 	}
-	if resp.StatusCode() != fasthttp.StatusOK {
-		return fmt.Errorf("torrents/add response status code:%d", resp.StatusCode())
+	req.Header.Set("content-type", contentType)
+	c.addCookies(req)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("clent.Do (%s): %w", req.RequestURI, err)
 	}
-	return err
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("call (%s) returned %d", req.RequestURI, resp.StatusCode)
+	}
+	return nil
 }
 
 func (c *Client) getMultipartURLBody(boundary, body []byte) []byte {
@@ -151,16 +150,21 @@ func (c *Client) randomBoundary() string {
 	return fmt.Sprintf("%x", buf)
 }
 
-func (c *Client) auth() {
-	req, res := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(res)
+func (c *Client) login() error {
+	requestBody := bytes.NewBufferString(fmt.Sprintf("username=%s&password=%s", c.username, c.password))
+	request, _ := http.NewRequest(http.MethodPost, c.url+loginRoute, requestBody)
+	request.Header.Set("Content-type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := c.client.Do(request)
+	if err != nil {
+		return err
+	}
+	c.cookies = resp.Cookies()
+	return nil
+}
 
-	req.SetRequestURI(c.url + "/api/v2/auth/login")
-	req.SetBodyString(fmt.Sprintf("username=%s&password=%s", c.login, c.password))
-	req.Header.SetMethod(fasthttp.MethodPost)
-
-	c.client.Do(req, res)
-	s := res.Header.Peek(fasthttp.HeaderSetCookie)
-	c.cookie = s
+func (c *Client) addCookies(req *http.Request) {
+	req.Header.Del("Cookie")
+	for _, ck := range c.cookies {
+		req.AddCookie(ck)
+	}
 }

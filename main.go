@@ -29,7 +29,7 @@ func main() {
 	logger.Out = os.Stdout
 
 	if err := utils.ParseConfig(cfg); err != nil {
-		logger.Panic(utils.WrapError("parse config:", err))
+		logger.Panic(utils.Wrap("parse config:", err))
 	}
 
 	go utils.StartSystemServer(logger, cfg.SystemPort)

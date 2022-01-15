@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +10,6 @@ import (
 	"tghomebot/api"
 	"tghomebot/utils"
 
-	"github.com/mailru/easyjson"
 	"github.com/sirupsen/logrus"
 )
 
@@ -72,38 +71,39 @@ func (s *Storage) loadData() error {
 	s.data = &api.Data{Chats: map[int64]struct{}{}}
 
 	if err := os.MkdirAll(filepath.Dir(s.filePath), os.ModePerm); err != nil {
-		return utils.WrapError("mkdir", err)
+		return utils.Wrap("mkdir", err)
 	}
-	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
+	_, err := os.Stat(s.filePath)
+	if os.IsNotExist(err) {
 		f, _ := os.Create(s.filePath)
-		w := bufio.NewWriter(f)
 		s.data = &api.Data{Chats: map[int64]struct{}{}}
-		_, err = easyjson.MarshalToWriter(s.data, w)
+		b, _ := json.Marshal(s.data)
+		_, err = f.Write(b)
 		if err != nil {
-			return utils.WrapError("marshal to writer", err)
-		}
-		if err = w.Flush(); err != nil {
-			return utils.WrapError("writer flush", err)
+			return utils.Wrap("file write", err)
 		}
 		if err = f.Close(); err != nil {
-			return utils.WrapError("closing file", err)
+			return utils.Wrap("closing file", err)
 		}
-	} else if err != nil {
-		return utils.WrapError("file stat", err)
-	} else {
-		f, err := os.OpenFile(s.filePath, os.O_RDONLY, os.ModePerm)
-		if err != nil {
-			return utils.WrapError("open file", err)
-		}
-		rdr := bufio.NewReader(f)
-		err = easyjson.UnmarshalFromReader(rdr, s.data)
-		if err != nil {
-			return utils.WrapError("unmarshal json from file", err)
-		}
-		err = f.Close()
-		if err != nil {
-			return utils.WrapError("closing file", err)
-		}
+		return nil
+	}
+
+	if err != nil {
+		return utils.Wrap("file stat", err)
+	}
+
+	f, err := os.OpenFile(s.filePath, os.O_RDONLY, os.ModePerm)
+	if err != nil {
+		return utils.Wrap("open file", err)
+	}
+	dec := json.NewDecoder(f)
+	err = dec.Decode(s.data)
+	if err != nil {
+		return utils.Wrap("unmarshal json from file", err)
+	}
+	err = f.Close()
+	if err != nil {
+		return utils.Wrap("closing file", err)
 	}
 	return nil
 }
@@ -114,26 +114,24 @@ func (s *Storage) saveData() {
 
 	f, err := os.OpenFile(s.filePath, os.O_RDWR, os.ModePerm)
 	if err != nil {
-		err = utils.WrapError("storage save data: open file", err)
+		err = utils.Wrap("storage save data: open file", err)
 		s.logger.Error(err)
 		return
 	}
 	defer func() {
 		if err := f.Close(); err != nil {
-			logrus.Error(utils.WrapError("saveData: closing file", err))
+			logrus.Error(utils.Wrap("saveData: closing file", err))
 		}
 	}()
 	err = f.Truncate(0)
 	if err != nil {
-		err = utils.WrapError("storage save data: truncate file", err)
+		err = utils.Wrap("storage save data: truncate file", err)
 		s.logger.Error(err)
 		return
 	}
-	w := bufio.NewWriter(f)
-	if _, err = easyjson.MarshalToWriter(s.data, w); err != nil {
-		logrus.Error(utils.WrapError("saveData: MarshalToWriter", err))
-	}
-	if err = w.Flush(); err != nil {
-		logrus.Error(utils.WrapError("saveData: flush writer", err))
+	encoder := json.NewEncoder(f)
+	err = encoder.Encode(s.data)
+	if err != nil {
+		logrus.Error(utils.Wrap("saveData: MarshalToWriter", err))
 	}
 }

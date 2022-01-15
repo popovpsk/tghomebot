@@ -1,7 +1,10 @@
 package tgbot
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -11,7 +14,6 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/sirupsen/logrus"
-	"github.com/valyala/fasthttp"
 )
 
 //Bot ...
@@ -21,7 +23,7 @@ type Bot struct {
 	api         *qbittorrent.Client
 	token       string
 	events      chan string
-	downloading sync.Map
+	downloading *sync.Map
 	logger      *logrus.Logger
 }
 
@@ -29,7 +31,7 @@ type Bot struct {
 func NewBot(token string, data *storage.Storage, api *qbittorrent.Client, logger *logrus.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		return nil, utils.WrapError("new telegram bot", err)
+		return nil, utils.Wrap("new telegram bot", err)
 	}
 	logger.Infof("Authorized on account %s", bot.Self.UserName)
 
@@ -38,7 +40,7 @@ func NewBot(token string, data *storage.Storage, api *qbittorrent.Client, logger
 		data:        data,
 		token:       token,
 		botAPI:      bot,
-		downloading: sync.Map{},
+		downloading: &sync.Map{},
 		events:      make(chan string),
 		logger:      logger,
 	}, nil
@@ -58,7 +60,7 @@ func (b *Bot) Start() error {
 			for _, chatID := range b.data.GetChats() {
 				msg := tgbotapi.NewMessage(chatID, event)
 				if _, err = b.botAPI.Send(msg); err != nil {
-					logrus.Error(utils.WrapError("bot send event message", err))
+					logrus.Error(utils.Wrap("bot send event message", err))
 				}
 			}
 		}
@@ -84,12 +86,12 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	}
 
 	if err != nil {
-		err = utils.WrapError("message handling", err)
+		err = utils.Wrap("message handling", err)
 		b.logger.Error(err)
 		msg := tgbotapi.NewMessage(chatID, err.Error())
 		_, err = b.botAPI.Send(msg)
 		if err != nil {
-			b.logger.Error(utils.WrapError("bot sending message", err))
+			b.logger.Error(utils.Wrap("bot sending message", err))
 		}
 	}
 }
@@ -99,22 +101,25 @@ func (b *Bot) handleFile(update tgbotapi.Update) error {
 	fileConfig := tgbotapi.FileConfig{FileID: fileID}
 	file, err := b.botAPI.GetFile(fileConfig)
 	if err != nil {
-		return utils.WrapError("get telegram file info", err)
+		return utils.Wrap("get telegram file info", err)
 	}
 
-	req, resp := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(resp)
+	resp, err := http.Get(file.Link(b.token))
 
-	req.Header.SetMethod(fasthttp.MethodGet)
-	req.SetRequestURI(file.Link(b.token))
-	err = fasthttp.Do(req, resp)
 	if err != nil {
-		return utils.WrapError("download telegram file", err)
+		return utils.Wrap("download telegram file", err)
+	}
+	var body bytes.Buffer
+	if resp.ContentLength > 0 {
+		body.Grow(int(resp.ContentLength))
+	}
+	_, err = io.Copy(&body, resp.Body)
+	if err != nil {
+		return utils.Wrap("io.Copy body", err)
 	}
 
-	if err := b.api.SendFile(resp.Body()); err != nil {
-		return utils.WrapError("api call error", err)
+	if err := b.api.SendFile(body.Bytes()); err != nil {
+		return utils.Wrap("api call error", err)
 	}
 	return err
 }
@@ -130,25 +135,33 @@ func (b *Bot) startWatching() {
 func (b *Bot) watch() {
 	torrents, err := b.api.GetTorrentsInfo()
 	if err != nil {
-		logrus.Error(utils.WrapError("watch: get torrents info", err))
+		logrus.Error(utils.Wrap("watch: get torrents info", err))
 	}
+
 	for _, t := range torrents {
 		_, ok := b.downloading.Load(t.Hash)
-		switch t.State {
-		case qbittorrent.QueuedUPState, qbittorrent.UploadingState:
+		switch t.State() {
+		case qbittorrent.Uploading:
 			if ok {
 				b.downloading.Delete(t.Hash)
-				go func() {
-					b.events <- fmt.Sprintf("<--Загружен-->\n%s", t.Name)
-				}()
+				b.sendMessage(fmt.Sprintf("<--Загружен-->\n%s", t.Name))
 			}
-		case qbittorrent.DownloadingState, qbittorrent.CheckingDLState:
+		case qbittorrent.Downloading:
 			if !ok {
 				b.downloading.Store(t.Hash, t.Name)
-				go func() {
-					b.events <- fmt.Sprintf("<--Загружается-->\n%s", t.Name)
-				}()
+				b.sendMessage(fmt.Sprintf("<--Загружен-->\n%s", t.Name))
 			}
 		}
+	}
+}
+
+func (b *Bot) sendMessage(message string) {
+	select {
+	case b.events <- message:
+		return
+	default:
+		go func(msg string) {
+			b.events <- msg
+		}(message)
 	}
 }
